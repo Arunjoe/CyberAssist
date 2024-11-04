@@ -1,0 +1,162 @@
+import requests
+import csv, json
+from datetime import datetime, timedelta
+import sys
+
+# https://services.nvd.nist.gov/rest/json/cves/2.0/?
+# pubStartDate=2024-10-04T00:00:00.000&
+# pubEndDate=2024-11-01T00:00:00.000&
+# keywordSearch=Kubernetes
+
+# maximum day range can be upto only 120 days
+# create_filename
+# write_to_csv
+# write_to_json
+# modify_cve_list
+# make_request
+# prepare_url_params
+# get_cve_details
+# read_keyword
+# get_dates
+# main
+
+#-----------------------------------------------------------------------------------------------
+current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+BASE_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0/?"
+
+
+def create_filename(extenstion):
+    filename = "CVE" + current_time + extenstion
+    return filename
+
+
+def write_to_csv(rows, filename):
+    header = ['CVE-ID', 'Published', 'Metric', 'Score', 'Severity']
+    with open(filename, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        # Write the header
+        writer.writerow(header)
+        # Write the data rows
+        for row in rows:
+            writer.writerow(row)
+
+
+def write_to_json(json_data):
+    # Write the dictionary to a JSON file
+    filename = create_filename(".json")
+    with open(filename, 'w') as json_file:
+        json.dump(json_data, json_file,
+                  indent=4)  # indent for pretty formatting
+    print(f"Data has saved to {filename}")
+    return None
+
+
+def modify_cve_list(cve_api_results):
+    priority_order = ['cvssMetricV31', 'cvssMetricV40', 'cvssMetricV2']
+    vuln_list = cve_api_results[0]
+    all_vuln = []
+    high_vuln = []
+    for vulnerbility in vuln_list:
+        cve = vulnerbility["cve"]
+        id = cve['id']
+        published = cve["published"]
+        for metric in priority_order:
+            if metric in cve['metrics']:
+                score_data = cve['metrics'][metric][0]['cvssData']
+                base_score = score_data['baseScore']
+                base_severity = score_data['baseSeverity']
+                all_vuln.append(
+                    [id, published, metric, base_score, base_severity])
+                if base_score > 8:
+                    high_vuln.append(
+                        [id, published, metric, base_score, base_severity])
+                break  # Break after the first metric in priority order
+    print("\nVulnerbilities with severity score above 8 -- HIGH and CRITICAL")
+    for vuln in high_vuln:
+        print(vuln)
+    print("==============================================================================\n")
+    print(f"Total Vuln Count: {len(all_vuln)}, HIGH and CRITICAL Count: {len(high_vuln)}")
+    return all_vuln
+
+
+def make_request(url):
+    print("Making request to", url)
+    headers = {}
+    headers[
+        'User-Agent'] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0"
+
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            json_response = response.json()
+            totalResults = json_response["totalResults"]
+            print("API success", response.status_code, "totalResults:",
+                  totalResults)
+            return json_response
+        else:
+            print(response.status_code, url)
+            return None
+    except requests.RequestException as e:
+        print(e)
+        return None
+
+
+def prepare_url_params(start_date, end_date, keyword):
+    params = "pubStartDate=" + start_date + "&pubEndDate=" + end_date
+    if keyword:
+        params = params + "&keywordSearch=" + keyword
+    final_url_with_params = BASE_URL + params
+    return final_url_with_params
+
+
+def get_cve_details(start_data, end_date, severity, keyword=None):
+    #------------Commenting here to skip the API call to NVD------------
+    url_with_params = prepare_url_params(start_data, end_date, keyword)
+    cve_results = make_request(url_with_params)
+    vulnerabilities = []
+    if cve_results:
+        write_to_json(cve_results)
+        vulnerabilities.append(cve_results["vulnerabilities"])
+    #------------Commenting here to skip the API call to NVD------------
+    modified_vulnerabilities = modify_cve_list(vulnerabilities)
+    return modified_vulnerabilities
+
+
+def read_keyword():
+    # Check if there are any command line arguments provided
+    if len(sys.argv) < 2:
+        return None
+    # Get the keyword from the first command line argument
+    keyword = sys.argv[1].strip()  # Remove any leading/trailing whitespace
+    # Check if the keyword is not empty and has more than 3 characters
+    if keyword and len(keyword) >= 3:
+        return keyword
+    return None
+
+
+def get_dates():
+    today = datetime.now()
+    end_date = today.strftime('%Y-%m-%d') + "T00:00:00.000"
+    before_120_days = (today - timedelta(days=120)).strftime('%Y-%m-%d')
+    start_date = before_120_days + "T00:00:00.000"
+    return start_date, end_date
+
+
+def main():
+    # start_date = "2024-10-09T00:00:00.000"
+    # end_date = "2024-11-01T00:00:00.000"
+    start_date, end_date = get_dates()
+    severity = "HIGH"
+    # keywordSearch="Kubernetes"
+    keyword_to_search = read_keyword()
+    print(f"start date:\t\t{start_date} \nend date:\t\t{end_date}\nkeyword_to_search: \t{keyword_to_search}\n")
+    vulnerabilities = get_cve_details(start_date, end_date, severity,
+                                      keyword_to_search)
+    if keyword_to_search:
+        filename = create_filename(f"{keyword_to_search[:16]}.csv")
+    else:
+        filename = create_filename("general.csv")
+    write_to_csv(vulnerabilities, filename)
+
+
+main()
